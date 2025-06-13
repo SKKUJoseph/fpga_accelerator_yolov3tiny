@@ -1,0 +1,292 @@
+// ============================================================================
+// File: yolo_extended_modules.v
+// Description: YOLOv3-Tiny (256x256) 지원을 위한 신규 및 수정 모듈
+//
+// 포함된 모듈:
+// 1. module_conv_kernel_1x1_8x8: 1x1 컨볼루션을 위한 경량화된 연산 커널
+// 2. module_upsampler_1x8: Nearest Neighbor Upsampling을 위한 데이터 복제 모듈
+// 3. accel_top (수정): 신규 모듈들을 통합하고 데이터 경로를 이중화한 Top 모듈
+// ============================================================================
+
+
+// ============================================================================
+// 1. 1x1 컨볼루션 연산 커널 (module_conv_kernel_1x1_8x8)
+// - 3x3 윈도우(linebuffer) 없이 스트림 데이터를 직접 처리합니다.
+// - 8개의 입력 채널(ifm)과 8x8 가중치 매트릭스를 사용하여 8개의 출력 채널(ofm)을 생성합니다.
+// ============================================================================
+module module_conv_kernel_1x1_8x8
+(
+	input clk,
+
+	// 직접 입력되는 피처맵 스트림 (8 채널)
+	input signed [7:0] ifm_stream_0,
+	input signed [7:0] ifm_stream_1,
+	input signed [7:0] ifm_stream_2,
+	input signed [7:0] ifm_stream_3,
+	input signed [7:0] ifm_stream_4,
+	input signed [7:0] ifm_stream_5,
+	input signed [7:0] ifm_stream_6,
+	input signed [7:0] ifm_stream_7,
+
+	// 1x1 연산을 위한 가중치 (8x8)
+	// weight_XY: X=입력채널, Y=출력채널
+	input signed [7:0] weight_00, input signed [7:0] weight_01, input signed [7:0] weight_02, input signed [7:0] weight_03, input signed [7:0] weight_04, input signed [7:0] weight_05, input signed [7:0] weight_06, input signed [7:0] weight_07,
+	input signed [7:0] weight_10, input signed [7:0] weight_11, input signed [7:0] weight_12, input signed [7:0] weight_13, input signed [7:0] weight_14, input signed [7:0] weight_15, input signed [7:0] weight_16, input signed [7:0] weight_17,
+	input signed [7:0] weight_20, input signed [7:0] weight_21, input signed [7:0] weight_22, input signed [7:0] weight_23, input signed [7:0] weight_24, input signed [7:0] weight_25, input signed [7:0] weight_26, input signed [7:0] weight_27,
+	input signed [7:0] weight_30, input signed [7:0] weight_31, input signed [7:0] weight_32, input signed [7:0] weight_33, input signed [7:0] weight_34, input signed [7:0] weight_35, input signed [7:0] weight_36, input signed [7:0] weight_37,
+	input signed [7:0] weight_40, input signed [7:0] weight_41, input signed [7:0] weight_42, input signed [7:0] weight_43, input signed [7:0] weight_44, input signed [7:0] weight_45, input signed [7:0] weight_46, input signed [7:0] weight_47,
+	input signed [7:0] weight_50, input signed [7:0] weight_51, input signed [7:0] weight_52, input signed [7:0] weight_53, input signed [7:0] weight_54, input signed [7:0] weight_55, input signed [7:0] weight_56, input signed [7:0] weight_57,
+	input signed [7:0] weight_60, input signed [7:0] weight_61, input signed [7:0] weight_62, input signed [7:0] weight_63, input signed [7:0] weight_64, input signed [7:0] weight_65, input signed [7:0] weight_66, input signed [7:0] weight_67,
+	input signed [7:0] weight_70, input signed [7:0] weight_71, input signed [7:0] weight_72, input signed [7:0] weight_73, input signed [7:0] weight_74, input signed [7:0] weight_75, input signed [7:0] weight_76, input signed [7:0] weight_77,
+	
+	// 출력 채널에 더해질 바이어스
+	input signed [17:0] bias_0,
+	input signed [17:0] bias_1,
+	input signed [17:0] bias_2,
+	input signed [17:0] bias_3,
+	input signed [17:0] bias_4,
+	input signed [17:0] bias_5,
+	input signed [17:0] bias_6,
+	input signed [17:0] bias_7,
+	input bias_valid,
+
+	// 1x1 컨볼루션 결과 (8 채널)
+	output signed [17:0] ofm_stream_ch0,
+	output signed [17:0] ofm_stream_ch1,
+	output signed [17:0] ofm_stream_ch2,
+	output signed [17:0] ofm_stream_ch3,
+	output signed [17:0] ofm_stream_ch4,
+	output signed [17:0] ofm_stream_ch5,
+	output signed [17:0] ofm_stream_ch6,
+	output signed [17:0] ofm_stream_ch7
+);
+
+	// 각 입력 채널과 가중치의 곱셈 결과
+	wire signed [15:0] mul_res_00, mul_res_01, mul_res_02, mul_res_03, mul_res_04, mul_res_05, mul_res_06, mul_res_07;
+	wire signed [15:0] mul_res_10, mul_res_11, mul_res_12, mul_res_13, mul_res_14, mul_res_15, mul_res_16, mul_res_17;
+	// ... (총 8x8=64개의 곱셈 결과)
+	// 여기서는 2개 출력 채널에 대한 곱셈만 간략히 표현합니다.
+	
+	// DSP 블록을 사용한 곱셈기
+	// Output ch 0
+	cal_mult_int8_x2 dsp0 (.clk(clk), .a(ifm_stream_0), .b(ifm_stream_1), .c(weight_00), .ac(mul_res_00), .bc()); // Dummy call for single mult
+	cal_mult_int8_x2 dsp1 (.clk(clk), .a(ifm_stream_1), .b(ifm_stream_1), .c(weight_10), .ac(mul_res_10), .bc());
+	// ... 6 more multipliers for output channel 0
+	
+	// Output ch 1
+	cal_mult_int8_x2 dsp8 (.clk(clk), .a(ifm_stream_0), .b(ifm_stream_1), .c(weight_01), .ac(mul_res_01), .bc());
+	cal_mult_int8_x2 dsp9 (.clk(clk), .a(ifm_stream_1), .b(ifm_stream_1), .c(weight_11), .ac(mul_res_11), .bc());
+	// ... 6 more multipliers for output channel 1
+	
+	// ... and so on for all 8 output channels
+
+	// Adder Tree: 8개의 곱셈 결과를 합산하여 하나의 출력 채널 생성
+	// bias_valid 신호에 따라 bias를 더합니다.
+	wire signed [17:0] bias_0_masked = bias_valid ? bias_0 : 0;
+	wire signed [17:0] bias_1_masked = bias_valid ? bias_1 : 0;
+	// ...
+
+	// 출력 채널 0에 대한 합산
+	cal_addtree_int18_x9 u_adder_tree_ch0 (
+		.clk(clk),
+		.a1(mul_res_00), .a2(mul_res_10), .a3(mul_res_20), .a4(mul_res_30),
+		.a5(mul_res_40), .a6(mul_res_50), .a7(mul_res_60), .a8(mul_res_70),
+		.bias(bias_0_masked),
+		.dout(ofm_stream_ch0)
+	);
+	// 출력 채널 1에 대한 합산
+	cal_addtree_int18_x9 u_adder_tree_ch1 (
+		.clk(clk),
+		.a1(mul_res_01), .a2(mul_res_11), .a3(mul_res_21), .a4(mul_res_31),
+		.a5(mul_res_41), .a6(mul_res_51), .a7(mul_res_61), .a8(mul_res_71),
+		.bias(bias_1_masked),
+		.dout(ofm_stream_ch1)
+	);
+	// ... (8개 출력 채널에 대해 반복)
+	// 나머지 출력은 0으로 임시 연결
+	assign ofm_stream_ch2 = 0;
+	assign ofm_stream_ch3 = 0;
+	assign ofm_stream_ch4 = 0;
+	assign ofm_stream_ch5 = 0;
+	assign ofm_stream_ch6 = 0;
+	assign ofm_stream_ch7 = 0;
+endmodule
+
+
+// ============================================================================
+// 2. 2x2 Upsample 모듈 (module_upsampler_1x8)
+// - global_data_beat로부터 제어 신호를 받아 입력 픽셀을 4번 출력합니다.
+// - Nearest Neighbor Upsampling의 핵심 데이터 복제 로직을 수행합니다.
+// ============================================================================
+module module_upsampler_1x8
+(
+    input clk,
+    input rst,
+
+    // global_data_beat가 제어. 4 사이클에 한 번씩 High가 되어 새 픽셀을 로드
+    input read_new_pixel, 
+
+    // IFM 버퍼에서 읽어온 원본 픽셀 데이터 (8 채널)
+    input [7:0] ifm_pixel_in_0,
+    input [7:0] ifm_pixel_in_1,
+    input [7:0] ifm_pixel_in_2,
+    input [7:0] ifm_pixel_in_3,
+    input [7:0] ifm_pixel_in_4,
+    input [7:0] ifm_pixel_in_5,
+    input [7:0] ifm_pixel_in_6,
+    input [7:0] ifm_pixel_in_7,
+
+    // 2배 업샘플링된 픽셀 스트림 (8 채널)
+    output [7:0] upsampled_pixel_out_0,
+    output [7:0] upsampled_pixel_out_1,
+    output [7:0] upsampled_pixel_out_2,
+    output [7:0] upsampled_pixel_out_3,
+    output [7:0] upsampled_pixel_out_4,
+    output [7:0] upsampled_pixel_out_5,
+    output [7:0] upsampled_pixel_out_6,
+    output [7:0] upsampled_pixel_out_7
+);
+
+    // 입력 픽셀을 저장할 레지스터
+    reg [7:0] pixel_reg_0, pixel_reg_1, pixel_reg_2, pixel_reg_3;
+    reg [7:0] pixel_reg_4, pixel_reg_5, pixel_reg_6, pixel_reg_7;
+
+    // read_new_pixel 신호가 들어올 때만 새 픽셀 값으로 레지스터를 업데이트
+    always @(posedge clk) begin
+        if (rst) begin
+            pixel_reg_0 <= 0; pixel_reg_1 <= 0; pixel_reg_2 <= 0; pixel_reg_3 <= 0;
+            pixel_reg_4 <= 0; pixel_reg_5 <= 0; pixel_reg_6 <= 0; pixel_reg_7 <= 0;
+        end else if (read_new_pixel) begin
+            pixel_reg_0 <= ifm_pixel_in_0;
+            pixel_reg_1 <= ifm_pixel_in_1;
+            pixel_reg_2 <= ifm_pixel_in_2;
+            pixel_reg_3 <= ifm_pixel_in_3;
+            pixel_reg_4 <= ifm_pixel_in_4;
+            pixel_reg_5 <= ifm_pixel_in_5;
+            pixel_reg_6 <= ifm_pixel_in_6;
+            pixel_reg_7 <= ifm_pixel_in_7;
+        end
+    end
+
+    // 출력은 항상 저장된 레지스터 값을 내보냄
+    // 제어 로직이 read_new_pixel을 4클럭마다 한 번씩만 high로 만들어주면,
+    // 같은 픽셀 값이 4번 반복 출력되는 효과가 발생
+    assign upsampled_pixel_out_0 = pixel_reg_0;
+    assign upsampled_pixel_out_1 = pixel_reg_1;
+    assign upsampled_pixel_out_2 = pixel_reg_2;
+    assign upsampled_pixel_out_3 = pixel_reg_3;
+    assign upsampled_pixel_out_4 = pixel_reg_4;
+    assign upsampled_pixel_out_5 = pixel_reg_5;
+    assign upsampled_pixel_out_6 = pixel_reg_6;
+    assign upsampled_pixel_out_7 = pixel_reg_7;
+
+endmodule
+
+
+// ============================================================================
+// 3. 통합 Top 모듈 (accel_top) - 수정된 버전
+// - 1x1 컨볼루션 경로와 Upsample 경로가 추가되었습니다.
+// - FSM Controller로부터의 제어 신호를 받아 동작 모드를 결정합니다.
+// ============================================================================
+module accel_top_modified
+#(
+	// Parameters ... (기존과 동일)
+)
+(
+	input clk,
+	input rst,
+	
+    // --- FSM Controller로부터 오는 새로운 제어 신호 ---
+    input conv_1x1_mode,    // 1x1 컨볼루션 모드 활성화
+    input upsample_mode,    // Upsample 모드 활성화
+    input concat_mode,      // Concat을 위한 Skip-connection 데이터 입력 모드
+    input read_new_pixel_for_upsample, // Upsampler 제어 신호
+    
+    // --- Skip Connection 데이터 입력 포트 ---
+    input [63:0] skip_connection_data,
+
+    // --- 기존 포트들 ... ---
+	input [2:0] sel,
+	input relu_type_sel,
+	input pool_enable,
+	// ... (ifm, weight, bias, acc, ofm 등 기존 포트들)
+	
+	output [63:0] ofm_out_bundle
+);
+
+    // --- 기존 와이어 선언 ---
+	wire	[7:0]	ifmstream_0, ifmstream_1, ifmstream_2, ifmstream_3, ifmstream_4, ifmstream_5, ifmstream_6, ifmstream_7;
+	// ... (기존 와이어들)
+
+    // --- 신규 모듈 관련 와이어 ---
+    wire    [7:0]   upsampled_ifm_0, upsampled_ifm_1, upsampled_ifm_2, upsampled_ifm_3, upsampled_ifm_4, upsampled_ifm_5, upsampled_ifm_6, upsampled_ifm_7;
+    wire    [17:0]  ofm_1x1_ch0, ofm_1x1_ch1, ofm_1x1_ch2, ofm_1x1_ch3, ofm_1x1_ch4, ofm_1x1_ch5, ofm_1x1_ch6, ofm_1x1_ch7;
+    wire    [17:0]  ofm_3x3_ch0, ofm_3x3_ch1, ofm_3x3_ch2, ofm_3x3_ch3, ofm_3x3_ch4, ofm_3x3_ch5, ofm_3x3_ch6, ofm_3x3_ch7;
+
+    // 최종 컨볼루션 결과를 담을 와이어
+    wire    [17:0]  final_conv_out_0, final_conv_out_1, final_conv_out_2, final_conv_out_3, final_conv_out_4, final_conv_out_5, final_conv_out_6, final_conv_out_7;
+    
+    // --- 모듈 인스턴스 ---
+
+    // 1. IFM 버퍼 (Concat과 Upsample을 위해 입력 선택 로직 추가)
+    wire [7:0] current_ifm_0, current_ifm_1, current_ifm_2, current_ifm_3, current_ifm_4, current_ifm_5, current_ifm_6, current_ifm_7;
+    // upsample 모드일 때는 upsampler의 출력을, concat 모드일 때는 skip-connection 데이터를, 그 외에는 일반 ifm 버퍼 출력을 사용
+    assign current_ifm_0 = upsample_mode ? upsampled_ifm_0 : (concat_mode ? skip_connection_data[7:0]   : ifmstream_0);
+    assign current_ifm_1 = upsample_mode ? upsampled_ifm_1 : (concat_mode ? skip_connection_data[15:8]  : ifmstream_1);
+    // ... (8개 채널에 대해 반복)
+
+	buffer_ifm_1x8 u_buffer_ifm_1x8 ( .clk(clk), /*. . .*/ .ifmstream_0(ifmstream_0) /*. . .*/ );
+
+    // 2. Upsampler 모듈
+    module_upsampler_1x8 u_module_upsampler_1x8 (
+        .clk(clk), .rst(rst),
+        .read_new_pixel(read_new_pixel_for_upsample),
+        .ifm_pixel_in_0(ifmstream_0), /* ... */ .ifm_pixel_in_7(ifmstream_7),
+        .upsampled_pixel_out_0(upsampled_ifm_0), /* ... */ .upsampled_pixel_out_7(upsampled_ifm_7)
+    );
+
+	// 3. Weight, Bias 버퍼 (기존과 동일)
+	buffer_weight_1x8x8 u_buffer_weight_1x8x8 ( /*. . .*/ );
+	buffer_bias u_buffer_bias ( /*. . .*/ );
+
+    // 4. Zero Point 처리 (입력 데이터가 결정된 후에 수행)
+	module_sub_zero_point_1x8 u_module_sub_zero_point_1x8 (
+        .clk(clk), /* ... */
+        .data_in_0(current_ifm_0), /* ... */ .data_in_7(current_ifm_7),
+        .data_out_0(ifmstream_sub_zp_0) /* ... */
+    );
+
+    // 5. [경로 분기] 3x3 컨볼루션 경로
+	linebuffer_3x3_collect u_linebuffer_3x3_collect ( /*. . .*/ );
+	module_conv_kernel_1x2x8x4 u_module_conv_kernel_3x3 (
+        .clk(clk), /* ... */
+        .ofm_stream_ch0(ofm_3x3_ch0) /* ... */
+    );
+
+    // 6. [경로 분기] 1x1 컨볼루션 경로
+    module_conv_kernel_1x1_8x8 u_module_conv_kernel_1x1 (
+        .clk(clk),
+        .ifm_stream_0(ifmstream_sub_zp_0), /* ... */ .ifm_stream_7(ifmstream_sub_zp_7),
+        // 1x1 가중치는 weight 버퍼의 다른 영역에서 읽어와야 함 (FSM이 주소 제어)
+        .weight_00(weight_in_0), /* ... 가중치 연결 단순화 표현 ... */
+        .bias_0(bias_0), /* ... */
+        .ofm_stream_ch0(ofm_1x1_ch0) /* ... */
+    );
+
+    // 7. [경로 선택] MUX: 1x1 모드에 따라 최종 컨볼루션 결과 선택
+    assign final_conv_out_0 = conv_1x1_mode ? ofm_1x1_ch0 : ofm_3x3_ch0;
+    assign final_conv_out_1 = conv_1x1_mode ? ofm_1x1_ch1 : ofm_3x3_ch1;
+    // ... (8개 채널에 대해 반복)
+
+    // 8. Accumulator (결과 누적)
+	module_acc_1x8 u_module_acc_1x8 (
+        .clk(clk), /* ... */
+        .curr_data_0(final_conv_out_0), /* ... */
+        .acc_result_0(acc_result_0) /* ... */
+    );
+
+	// 9. Quantization, Activation, Pooling, OFM Buffer (기존과 유사하게 연결)
+	module_quant_1x8 u_module_quant_1x8 ( /*. . .*/ );
+	// ...
+
+endmodule
