@@ -1,11 +1,12 @@
 module linebuffer_2x2_collect
 #(
-	parameter LEN1=16,
-	parameter LEN2=14,
-	parameter LEN3=28,
-	parameter LEN4=56,
-	parameter LEN5=112,
-	parameter LEN6=224
+	// YOLOv3-Tiny 스펙(W=8,16,32,64,128,256)에 맞게 수정된 파라미터
+	parameter LEN1=6,
+	parameter LEN2=8,
+	parameter LEN3=16,
+	parameter LEN4=32,
+	parameter LEN5=64,
+	parameter LEN6=128
 )
 (
 	input clk,
